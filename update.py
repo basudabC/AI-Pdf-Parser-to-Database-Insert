@@ -4,8 +4,8 @@ import os
 from pathlib import Path
 import pandas as pd
 import shutil
-import sqlite3
 from datetime import datetime
+import sqlite3
 from llama_parse import LlamaParse
 from database_utils import insert_csv_to_db
 import streamlit as st
@@ -356,7 +356,6 @@ def process_uploaded_file(uploaded_file, input_folder, output_folder, merged_fol
 
         return merged_df
 
-
 # def main():
 #     st.title("📋 PO Processing System")
 #     st.write("Upload a PO PDF file to process and manage the data")
@@ -447,6 +446,7 @@ def process_uploaded_file(uploaded_file, input_folder, output_folder, merged_fol
 #             # Cleanup temporary directories
 #             shutil.rmtree(temp_dir)
             
+
 def main():
     st.title("📋 PO Processing System")
     st.write("Upload a PO PDF file to process and manage the data")
@@ -467,38 +467,101 @@ def main():
         st.session_state['uploaded_file'] = uploaded_file
         st.session_state['processed_df'] = None
 
-    # Search Section
-    st.subheader("🔍 Search the Database")
-    with st.form("search_form"):
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            order_number = st.text_input("Order Number", "")
-        with col2:
-            style_code = st.text_input("Style Code", "")
-        with col3:
-            issue_date = st.date_input("Issue Date", datetime.now().date())
-        
-        search_button = st.form_submit_button("Search")
+    # Enhanced Search Section
+    st.subheader("🔍 Search Orders")
+    
+    # Create tabs for different search modes
+    search_tab, advanced_tab = st.tabs(["Quick Search", "Advanced Search"])
+    
+    with search_tab:
+        with st.form("quick_search_form"):
+            search_term = st.text_input("Search by Order Number, Style Code, or Color Name")
+            quick_search = st.form_submit_button("Quick Search")
+            
+        if quick_search and search_term:
+            try:
+                with sqlite3.connect(db_file) as conn:
+                    query = """
+                    SELECT * FROM orders
+                    WHERE OrderNumber LIKE ?
+                    OR StyleCode LIKE ?
+                    OR ColorName LIKE ?
+                    """
+                    search_pattern = f"%{search_term}%"
+                    params = (search_pattern, search_pattern, search_pattern)
+                    results = pd.read_sql_query(query, conn, params=params)
+                    display_search_results(results)
+            except Exception as e:
+                st.error(f"Search error: {str(e)}")
 
-    if search_button:
-        try:
-            with sqlite3.connect(db_file) as conn:
-                query = """
-                SELECT * FROM orders
-                WHERE (OrderNumber = ? OR ? = '')
-                  AND (StyleCode = ? OR ? = '')
-                  AND (IssueDate = ? OR ? = '')
-                """
-                params = (order_number, order_number, style_code, style_code, issue_date, issue_date)
-                results = pd.read_sql_query(query, conn, params)
-
-            if not results.empty:
-                st.write(f"Found {len(results)} result(s):")
-                st.dataframe(results, use_container_width=True)
-            else:
-                st.write("No results found for the given criteria.")
-        except Exception as e:
-            st.error(f"Error querying the database: {str(e)}")
+    with advanced_tab:
+        with st.form("advanced_search_form"):
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                order_number = st.text_input("Order Number")
+                style_code = st.text_input("Style Code")
+                
+            with col2:
+                color_name = st.text_input("Color Name")
+                min_quantity = st.number_input("Minimum Quantity", min_value=0)
+                
+            with col3:
+                date_range = st.date_input(
+                    "Date Range",
+                    value=(datetime.now().date() - timedelta(days=30), datetime.now().date()),
+                    max_value=datetime.now().date()
+                )
+                
+            sort_by = st.selectbox(
+                "Sort By",
+                options=["IssueDate", "OrderNumber", "StyleCode", "Quantity", "Total"],
+                index=0
+            )
+            sort_order = st.radio("Sort Order", ["Ascending", "Descending"], horizontal=True)
+            
+            advanced_search = st.form_submit_button("Search")
+            
+        if advanced_search:
+            try:
+                with sqlite3.connect(db_file) as conn:
+                    conditions = []
+                    params = []
+                    
+                    if order_number:
+                        conditions.append("OrderNumber LIKE ?")
+                        params.append(f"%{order_number}%")
+                    
+                    if style_code:
+                        conditions.append("StyleCode LIKE ?")
+                        params.append(f"%{style_code}%")
+                    
+                    if color_name:
+                        conditions.append("ColorName LIKE ?")
+                        params.append(f"%{color_name}%")
+                    
+                    if min_quantity > 0:
+                        conditions.append("Quantity >= ?")
+                        params.append(min_quantity)
+                    
+                    if len(date_range) == 2:
+                        conditions.append("IssueDate BETWEEN ? AND ?")
+                        params.extend([date_range[0], date_range[1]])
+                    
+                    where_clause = " AND ".join(conditions) if conditions else "1=1"
+                    order_direction = "DESC" if sort_order == "Descending" else "ASC"
+                    
+                    query = f"""
+                    SELECT * FROM orders
+                    WHERE {where_clause}
+                    ORDER BY {sort_by} {order_direction}
+                    """
+                    
+                    results = pd.read_sql_query(query, conn, params=params)
+                    display_search_results(results)
+                    
+            except Exception as e:
+                st.error(f"Advanced search error: {str(e)}")
 
     # File Processing Section
     if uploaded_file is not None:
@@ -574,6 +637,64 @@ def main():
             # Cleanup temporary directories
             shutil.rmtree(temp_dir)
 
+def display_search_results(results):
+    """Display search results with statistics and export options"""
+    if not results.empty:
+        # Display summary metrics
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Results Found", len(results))
+        with col2:
+            st.metric("Total Styles", results['StyleCode'].nunique())
+        with col3:
+            st.metric("Total Quantity", f"{results['Quantity'].sum():,.0f}")
+        with col4:
+            st.metric("Total Value", f"${results['Total'].sum():,.2f}")
+        
+        # Display results in an interactive table
+        st.dataframe(
+            results,
+            use_container_width=True,
+            column_config={
+                "Total": st.column_config.NumberColumn(
+                    "Total",
+                    format="$%.2f"
+                ),
+                "Quantity": st.column_config.NumberColumn(
+                    "Quantity",
+                    format="%d"
+                ),
+                "IssueDate": st.column_config.DateColumn(
+                    "Issue Date",
+                    format="YYYY-MM-DD"
+                )
+            }
+        )
+        
+        # Export options
+        col1, col2 = st.columns(2)
+        with col1:
+            csv = results.to_csv(index=False)
+            st.download_button(
+                label="Download Results as CSV",
+                data=csv,
+                file_name="search_results.csv",
+                mime="text/csv"
+            )
+        
+        with col2:
+            excel_buffer = io.BytesIO()
+            results.to_excel(excel_buffer, index=False)
+            excel_data = excel_buffer.getvalue()
+            st.download_button(
+                label="Download Results as Excel",
+                data=excel_data,
+                file_name="search_results.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+    else:
+        st.info("No results found matching your search criteria.")
 
 if __name__ == "__main__":
     main()
+
