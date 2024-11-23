@@ -11,7 +11,7 @@ from database_utils import insert_csv_to_db
 import streamlit as st
 import tempfile
 import json
-
+import io
 # Set page configuration
 st.set_page_config(
     page_title="PO Processing System",
