@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import pandas as pd
 import shutil
+import sqlite3
 from datetime import datetime
 from llama_parse import LlamaParse
 from database_utils import insert_csv_to_db
@@ -355,85 +356,6 @@ def process_uploaded_file(uploaded_file, input_folder, output_folder, merged_fol
 
         return merged_df
 
-# def main():
-#     st.title("📋 PO Processing System")
-#     st.write("Upload a PO PDF file to process and manage the data")
-
-#     # File uploader
-#     uploaded_file = st.file_uploader("Choose a PDF file", type=['pdf'])
-
-#     if uploaded_file is not None:
-#         # Create temporary directories
-#         temp_dir = tempfile.mkdtemp()
-#         input_folder = os.path.join(temp_dir, "D:\\content\\output")
-#         output_folder = os.path.join(temp_dir, "D:\\content\\converted_files")
-#         merged_folder = os.path.join(temp_dir, "D:\\content\\merged_output")
-        
-#         os.makedirs(input_folder, exist_ok=True)
-#         os.makedirs(output_folder, exist_ok=True)
-#         os.makedirs(merged_folder, exist_ok=True)
-
-#         try:
-#             # Process the file
-#             st.session_state.processed_df = process_uploaded_file(
-#                 uploaded_file, input_folder, output_folder, merged_folder
-#             )
-
-#             if st.session_state.processed_df is not None:
-#                 st.success("File processed successfully!")
-
-#                 # Display summary statistics
-#                 col1, col2, col3, col4 = st.columns(4)
-#                 with col1:
-#                     st.metric("Total Styles", st.session_state.processed_df['StyleCode'].nunique())
-#                 with col2:
-#                     st.metric("Total Colors", st.session_state.processed_df['ColorName'].nunique())
-#                 with col3:
-#                     st.metric("Total Quantity", f"{st.session_state.processed_df['Quantity'].sum():,.0f}")
-#                 with col4:
-#                     st.metric("Total Value", f"${st.session_state.processed_df['Total'].sum():,.2f}")
-
-#                 # Data Editor
-#                 st.subheader("Edit Data")
-#                 edited_df = st.data_editor(
-#                     st.session_state.processed_df,
-#                     num_rows="dynamic",
-#                     use_container_width=True
-#                 )
-
-#                 # Database Operations
-#                 col1, col2 = st.columns(2)
-#                 with col1:
-#                     if st.button("Save to Database", type="primary"):
-#                         try:
-#                             # Save edited DataFrame to temporary CSV
-#                             temp_csv = os.path.join(merged_folder, "edited_po.csv")
-#                             edited_df.to_csv(temp_csv, index=False)
-                            
-#                             # Insert into database
-#                             insert_csv_to_db("garment_orders.db", temp_csv)
-#                             st.success("Data successfully saved to database!")
-#                         except Exception as e:
-#                             st.error(f"Error saving to database: {str(e)}")
-
-#                 with col2:
-#                     if st.button("Download CSV"):
-#                         # Convert DataFrame to CSV
-#                         csv = edited_df.to_csv(index=False)
-#                         st.download_button(
-#                             label="Click to Download",
-#                             data=csv,
-#                             file_name="processed_po.csv",
-#                             mime="text/csv"
-#                         )
-
-#         except Exception as e:
-#             st.error(f"An error occurred: {str(e)}")
-
-#         finally:
-#             # Cleanup temporary directories
-#             shutil.rmtree(temp_dir)
-
 
 # def main():
 #     st.title("📋 PO Processing System")
@@ -455,16 +377,16 @@ def process_uploaded_file(uploaded_file, input_folder, output_folder, merged_fol
 #     if uploaded_file is not None:
 #         # Create temporary directories
 #         temp_dir = tempfile.mkdtemp()
-#         input_folder = os.path.join(temp_dir, "D:\\content\\output")
-#         output_folder = os.path.join(temp_dir, "D:\\content\\converted_files")
-#         merged_folder = os.path.join(temp_dir, "D:\\content\\merged_output")
+#         input_folder = os.path.join(temp_dir, "output")
+#         output_folder = os.path.join(temp_dir, "converted_files")
+#         merged_folder = os.path.join(temp_dir, "merged_output")
 
 #         os.makedirs(input_folder, exist_ok=True)
 #         os.makedirs(output_folder, exist_ok=True)
 #         os.makedirs(merged_folder, exist_ok=True)
 
 #         try:
-#             # Process the file
+#             # Process the file and update the processed_df if it's a new file
 #             if st.session_state['processed_df'] is None:
 #                 st.session_state['processed_df'] = process_uploaded_file(
 #                     uploaded_file, input_folder, output_folder, merged_folder
@@ -524,11 +446,13 @@ def process_uploaded_file(uploaded_file, input_folder, output_folder, merged_fol
 #         finally:
 #             # Cleanup temporary directories
 #             shutil.rmtree(temp_dir)
-
-
+            
 def main():
     st.title("📋 PO Processing System")
     st.write("Upload a PO PDF file to process and manage the data")
+
+    # Database file path
+    db_file = "garment_orders.db"
 
     # Clear session state on new file upload
     if 'uploaded_file' not in st.session_state:
@@ -543,6 +467,40 @@ def main():
         st.session_state['uploaded_file'] = uploaded_file
         st.session_state['processed_df'] = None
 
+    # Search Section
+    st.subheader("🔍 Search the Database")
+    with st.form("search_form"):
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            order_number = st.text_input("Order Number", "")
+        with col2:
+            style_code = st.text_input("Style Code", "")
+        with col3:
+            issue_date = st.date_input("Issue Date", datetime.now().date())
+        
+        search_button = st.form_submit_button("Search")
+
+    if search_button:
+        try:
+            with sqlite3.connect(db_file) as conn:
+                query = """
+                SELECT * FROM orders
+                WHERE (OrderNumber = ? OR ? = '')
+                  AND (StyleCode = ? OR ? = '')
+                  AND (IssueDate = ? OR ? = '')
+                """
+                params = (order_number, order_number, style_code, style_code, issue_date, issue_date)
+                results = pd.read_sql_query(query, conn, params)
+
+            if not results.empty:
+                st.write(f"Found {len(results)} result(s):")
+                st.dataframe(results, use_container_width=True)
+            else:
+                st.write("No results found for the given criteria.")
+        except Exception as e:
+            st.error(f"Error querying the database: {str(e)}")
+
+    # File Processing Section
     if uploaded_file is not None:
         # Create temporary directories
         temp_dir = tempfile.mkdtemp()
@@ -593,7 +551,7 @@ def main():
                             edited_df.to_csv(temp_csv, index=False)
 
                             # Insert into database
-                            insert_csv_to_db("garment_orders.db", temp_csv)
+                            insert_csv_to_db(db_file, temp_csv)
                             st.success("Data successfully saved to database!")
                         except Exception as e:
                             st.error(f"Error saving to database: {str(e)}")
@@ -615,8 +573,6 @@ def main():
         finally:
             # Cleanup temporary directories
             shutil.rmtree(temp_dir)
-            
-
 
 
 if __name__ == "__main__":
